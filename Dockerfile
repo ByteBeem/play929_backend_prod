@@ -1,0 +1,18 @@
+
+FROM node:18
+
+
+WORKDIR /app
+
+
+COPY package*.json ./
+RUN npm install --omit=dev
+
+
+COPY . .
+
+
+EXPOSE 8080
+
+# Start the server
+CMD ["node", "server.js"]

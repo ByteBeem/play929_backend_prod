@@ -1,0 +1,263 @@
+const Wallet = require("../models/wallet");
+const User = require("../models/User");
+const Transaction = require("../models/transactions");
+const authMiddleware = require("../middlewares/authMiddleware");
+const Authentication = require("../models/2FAuthentication");
+const sequelize = require("../config/db");
+const validator = require('validator');
+const { authenticator } = require('otplib');
+const qrcode = require('qrcode');
+
+
+
+const user2FASecrets = new Map();
+
+// Expiration time in milliseconds (3 minutes)
+const SECRET_EXPIRATION_TIME = 3 * 60 * 1000;
+
+
+const storeSecret = (email, secret) => {
+    const expirationTime = Date.now() + SECRET_EXPIRATION_TIME;
+    
+   
+    if (user2FASecrets.has(email)) {
+        
+      user2FASecrets.delete(email);
+    }
+
+    user2FASecrets.set(email, { secret, expirationTime });
+};
+
+
+const getSecret = (email) => {
+    const secret = user2FASecrets.get(email);
+
+    if (!secret) {
+       
+        return null;
+    }
+
+    if (Date.now() > secret.expirationTime) {
+      
+      user2FASecrets.delete(email);
+        return null;
+    }
+
+    return secret.secret;
+};
+
+
+const removeSecret = (email) => {
+    if (user2FASecrets.has(email)) {
+        
+      user2FASecrets.delete(email);
+    } else {
+        return null;
+    }
+};
+
+
+
+
+exports.Data = async (req, res) => {
+  try {
+    authMiddleware(["user"])(req, res, async () => {
+      
+      const user = await User.findOne({ where: { email: req.user.email } });
+
+      if (!user) {
+        return res.status(404).json({ error: "User Not Found." });
+      }
+
+     
+      let wallet = await Wallet.findOne({ where: { user_id: user.id } });
+
+      if (!wallet) {
+        
+        const initialBalance = user.country === 'South Africa' ? 20 : 5; 
+
+       
+        const t = await sequelize.transaction();
+
+        try {
+          
+          wallet = await Wallet.create(
+            {
+              user_id: user.id,
+              wallet_address: user.walletAddress, 
+              balance: 0,
+            },
+            { transaction: t }
+          );
+
+          // Create the initial deposit (bonus) transaction
+          const transaction = await Transaction.create(
+            {
+              wallet_id: wallet.id,
+              transaction_type: 'bonus', 
+              amount: initialBalance,
+              transaction_ref: `bonus-${wallet.id}-${Date.now()}`, 
+              status: 'completed',
+              wallet_address: wallet.wallet_address,
+            },
+            { transaction: t }
+          );
+
+          // Update wallet balance with the bonus
+          wallet.balance = initialBalance;
+          await wallet.save({ transaction: t });
+
+          // Commit the transaction
+          await t.commit();
+
+         
+          const userData = {
+            accountNumber: user.accountNumber,
+            fullName: user.firstName,
+            surname: user.lastName,
+            defaultProfilePictureUrl: user.profileImageUrl,
+            MFAEnabled: user.isTwoFactorEnabled,
+            wallet_address :user.walletAddress,
+            email :user.email,
+              balance: wallet.balance,
+              currency: wallet.currency,
+            
+          };
+
+        
+          res.json({ userData });
+
+        } catch (err) {
+          
+          await t.rollback();
+          console.error(err);
+          return res.status(500).json({ error: "Server error. Please try again later." });
+        }
+      } else {
+       
+        const userData = {
+          accountNumber: user.accountNumber,
+          fullName: user.firstName,
+          surname: user.lastName,
+          defaultProfilePictureUrl: user.profileImageUrl,
+          MFAEnabled: user.isTwoFactorEnabled,
+          balance: wallet.balance,
+          currency: wallet.currency,
+          wallet_address :user.walletAddress,
+          email :user.email,
+          
+        };
+
+        res.json({ userData });
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    return res.status(500).json({ error: "Server error. Please try again later." });
+  }
+};
+
+exports.enableMFA = async (req, res) => {
+  try {
+    authMiddleware(["user"])(req, res, async () => {
+      try {
+       
+        const secret = authenticator.generateSecret();
+
+        
+        const otpauthUrl = authenticator.keyuri(req.user.email, 'Play929.com', secret);
+
+      
+        qrcode.toDataURL(otpauthUrl, (err, imageUrl) => {
+          if (err) {
+            console.error('Error generating QR code', err);
+            return res.status(500).json({ error: "Failed to generate QR code." });
+          }
+
+        
+          storeSecret(req.user.email, secret);
+
+        
+          res.json({ imageUrl });
+        });
+      } catch (error) {
+        console.error('Error enabling MFA:', error);
+        return res.status(500).json({ error: "Server error. Please try again later." });
+      }
+    });
+  } catch (err) {
+    console.error('Error in MFA enable process:', err);
+    return res.status(500).json({ error: "Server error. Please try again later." });
+  }
+};
+
+exports.validateSecret = async (req, res) => {
+  try {
+    authMiddleware(["user"])(req, res, async () => {
+      const { code } = req.body;
+
+     
+      if (!code) {
+        return res.status(400).json({ error: "Code is required." });
+      }
+
+    
+      const sanitizedCode = validator.escape(code);
+      if (!validator.isNumeric(sanitizedCode) || sanitizedCode.length !== 6) {
+        return res.status(400).json({ error: "Invalid code format. It should be a 6-digit number." });
+      }
+
+     
+      const userSecret = await getSecret(req.user.email);
+      if (!userSecret) {
+        return res.status(404).json({ error: "No secret found for the user." });
+      }
+
+    
+      const isValid = authenticator.verify({ token: sanitizedCode, secret: userSecret });
+      if (!isValid) {
+        return res.status(400).json({ error: "Incorrect code. Please try again." });
+      }
+
+      removeSecret(req.user.email);
+
+    
+      const user = await User.findOne({ where: { email: req.user.email } });
+      if (!user) {
+        return res.status(404).json({ error: "User Not Found." });
+      }
+
+
+     
+      const t = await sequelize.transaction();
+
+      try {
+       
+        user.isTwoFactorEnabled = true;
+        await user.save({ transaction: t });
+
+      
+        await Authentication.create(
+          {
+            email_address: user.email,
+            secret: userSecret, 
+          },
+          { transaction: t }
+        );
+
+       
+        await t.commit();
+
+        return res.status(200).json({ message: "2FA enabled successfully." });
+      } catch (error) {
+        
+        await t.rollback();
+        console.error('Error enabling 2FA:', error);
+        return res.status(500).json({ error: "Failed to enable 2FA. Please try again later." });
+      }
+    });
+  } catch (err) {
+    console.error('Error validating MFA:', err);
+    return res.status(500).json({ error: "Server error. Please try again later." });
+  }
+};
