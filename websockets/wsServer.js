@@ -1,33 +1,31 @@
-const WebSocket = require('ws');
+const WebSocket = require("ws");
+const gamesPlayed = require("../models/gamesPlayed");
+const sequelize = require("../config/db");
+const Transactions = require("../models/transactions");
 
 let clients = [];
 
 const initWebSocketServer = (server) => {
   const wss = new WebSocket.Server({ server });
 
-  wss.on('connection', (ws) => {
-    console.log('A new WebSocket connection established.');
+  wss.on("connection", (ws, req) => {
+    console.log("New WebSocket connection established.");
     clients.push(ws);
 
-    // Handle incoming messages from the WebSocket client
-    ws.on('message', (message) => {
+    ws.on("message", async (message) => {
       try {
         const data = JSON.parse(message);
 
         switch (data.type) {
-          case 'StartGame':
-            handleStartGame(ws, data);
+          case "StartGame":
+            await handleStartGame(ws, data);
             break;
 
-          case 'ValidateUserCode':
-            handleValidateUserCode(ws, data);
-            break;
-
-          case 'CountdownTimer':
+          case "CountdownTimer":
             handleCountdownTimer(ws, data);
             break;
 
-          case 'Error':
+          case "Error":
             console.error(`Received error message: ${data.message}`);
             break;
 
@@ -36,79 +34,121 @@ const initWebSocketServer = (server) => {
             break;
         }
       } catch (error) {
-        console.error('Error parsing message:', error);
+        console.error("Error parsing message:", error);
+        ws.send(JSON.stringify({ type: "error", message: "Invalid JSON format" }));
       }
     });
 
-    // Handle WebSocket connection closure
-    ws.on('close', () => {
-      console.log('WebSocket connection closed.');
-      clients = clients.filter(client => client !== ws);
+    ws.on("close", () => {
+      console.log("WebSocket connection closed.");
+      clients = clients.filter((client) => client !== ws);
     });
   });
 };
 
+const handleStartGame = async (ws, data) => {
+  console.log("Starting game with data:", data);
 
-const handleStartGame = (ws, data) => {
-  console.log('Starting game with data:', data);
+  if (!data.gameSessionID) {
+    ws.send(JSON.stringify({ type: "error", message: "GameSessionID is required." }));
+    return ws.close();
+  }
 
-  const countdownTime = 30; 
+  // Begin transaction
+  const t = await sequelize.transaction();
+  let gameData;
 
-  let timeLeft = countdownTime;
+  try {
+    gameData = await gamesPlayed.findOne({ where: { gameId: data.gameSessionID }, transaction: t });
 
-  // Send the countdown timer every second to only the specific client (ws)
-  const countdownInterval = setInterval(() => {
-    // Send the countdown timer to this specific client
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({
-        type: 'CountdownTimer',
-        time: timeLeft,
-      }));
+    if (!gameData) {
+      ws.send(JSON.stringify({ type: "error", message: "Game session not found." }));
+      await t.rollback();
+      return ws.close();
     }
 
-    timeLeft -= 1;
+    let timeLeft = parseFloat(gameData.duration);
+    let gameActive = true;
 
-    // If countdown reaches 0, stop the interval and send "CountdownFinished" to this client
-    if (timeLeft <= 0) {
-      clearInterval(countdownInterval);
-
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({
-          type: 'CountdownFinished',
-          message: 'Countdown finished!',
-        }));
+    // Start countdown timer
+    const countdownInterval = setInterval(async () => {
+      if (!gameActive || ws.readyState !== WebSocket.OPEN) {
+        clearInterval(countdownInterval);
+        return;
       }
-    }
-  }, 1000); // Update every second
-};
 
-// Handle the "ValidateUserCode" message
-const handleValidateUserCode = (ws, data) => {
-  console.log('Validating user code:', data.userCode);
+      ws.send(JSON.stringify({ type: "CountdownTimer", time: timeLeft }));
+      timeLeft -= 1;
 
-  // Add your validation logic here
-  const isValid = data.userCode === 'validCode'; // Replace with actual validation logic
+      if (timeLeft <= 0) {
+        clearInterval(countdownInterval);
+        gameActive = false;
 
-  if (isValid) {
-    ws.send(JSON.stringify({
-      type: 'ValidationLog',
-      message: 'User code validated successfully!',
-      status: 'success',
-    }));
-  } else {
-    ws.send(JSON.stringify({
-      type: 'ValidationLog',
-      message: 'Invalid user code.',
-      status: 'error',
-    }));
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "CountdownFinished", message: "Countdown finished!" }));
+        }
+
+        try {
+          gameData.outcome = "time up";
+          gameData.endedAt = new Date();
+          await gameData.save({ transaction: t });
+
+          let transaction = await Transactions.findOne({
+            where: { transaction_ref: gameData.transactionRef },
+            transaction: t,
+          });
+
+          if (transaction) {
+            transaction.status = "completed";
+            await transaction.save({ transaction: t });
+          }
+
+          await t.commit();
+        } catch (dbError) {
+          console.error("Error updating game outcome:", dbError);
+          await t.rollback();
+        }
+      }
+    }, 1000);
+
+    // Cleanup if WebSocket disconnects before countdown finishes
+    ws.on("close", async () => {
+      if (!gameActive) return;
+      
+      clearInterval(countdownInterval);
+      gameActive = false;
+
+      try {
+        gameData.outcome = "disconnected";
+        gameData.endedAt = new Date();
+        await gameData.save({ transaction: t });
+
+        let transaction = await Transactions.findOne({
+          where: { transaction_ref: gameData.transactionRef },
+          transaction: t,
+        });
+
+        if (transaction) {
+          transaction.status = "failed";
+          await transaction.save({ transaction: t });
+        }
+
+        await t.commit();
+      } catch (dbError) {
+        console.error("Error updating game outcome on disconnect:", dbError);
+        await t.rollback();
+      }
+    });
+
+  } catch (error) {
+    console.error("Error starting game session:", error);
+    await t.rollback();
+    ws.send(JSON.stringify({ type: "error", message: "Server error while starting game." }));
   }
 };
 
-// Handle the "CountdownTimer" message
 const handleCountdownTimer = (ws, data) => {
-  console.log('Received countdown timer data:', data);
-  // Handle any additional countdown logic if necessary
+  console.log("Received countdown timer data:", data);
 };
-
 
 module.exports = { initWebSocketServer };

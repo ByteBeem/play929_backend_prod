@@ -38,10 +38,13 @@ require("dotenv").config();
 
 exports.depositMethods = async(req , res)=>{
     try{
+        authMiddleware(['user'])(req, res, async () => {
 
         const depositMethods = Methods.methods;
 
         res.json({depositMethods});
+
+        });
 
 
     }catch(err){
@@ -52,10 +55,13 @@ exports.depositMethods = async(req , res)=>{
 
 exports.withdrawalMethods = async(req ,res)=>{
     try{
+        authMiddleware(['user'])(req, res, async () => {
 
         const withdrawalMethodsData = WMethods.methods;
 
         res.json({withdrawalMethodsData});
+        
+        });
 
 
     }catch(err){

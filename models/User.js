@@ -57,13 +57,21 @@ const User = sequelize.define("User", {
         type: DataTypes.UUID,
         allowNull: true,
         references: {
-            model: "Users", 
+            model: "users", 
             key: "id",
         },
         onDelete: "SET NULL", 
     },
 }, { 
-    timestamps: true, 
+    timestamps: true,
+    indexes: [
+        { fields: ["email"], unique: true },  
+        { fields: ["accountNumber"], unique: true }, 
+        { fields: ["walletAddress"], unique: true },
+        { fields: ["country"] }, 
+        { fields: ["role"] }, 
+    ],
+    tableName: "users",
 });
 
 module.exports = User;

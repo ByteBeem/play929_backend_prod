@@ -1,6 +1,6 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../config/db");
-const User = require("./User"); // Assuming you have a User model
+const User = require("./User"); 
 
 const Wallet = sequelize.define("Wallet", {
   id: {
@@ -12,10 +12,10 @@ const Wallet = sequelize.define("Wallet", {
     type: DataTypes.UUID,
     allowNull: false,
     references: {
-      model: 'Users', // Reference to the Users model
+      model: 'users', 
       key: 'id'
     },
-    onDelete: 'CASCADE', // If user is deleted, wallet will be deleted as well
+    onDelete: 'CASCADE',
   },
   wallet_address: {
     type: DataTypes.STRING(255),
@@ -30,7 +30,7 @@ const Wallet = sequelize.define("Wallet", {
   currency: {
     type: DataTypes.STRING(10),
     allowNull: false,
-    defaultValue: 'USD', // Default currency
+    defaultValue: 'R', 
   },
   status: {
     type: DataTypes.ENUM('active', 'suspended', 'closed'),
@@ -43,26 +43,18 @@ const Wallet = sequelize.define("Wallet", {
   createdAt: 'created_at',
 
   hooks: {
-    // Hook to set currency based on user's country before creating the wallet
-    async beforeCreate(wallet, options) {
-      const user = await User.findByPk(wallet.user_id); // Fetch user by user_id
-      if (user && user.country === 'South Africa') {
-        wallet.currency = 'R'; // Set currency to 'R' (ZAR)
-      } else {
-        wallet.currency = '$'; // Default currency to USD if not South Africa
-      }
-    },
-
-    // Hook to set currency when updating the wallet
-    async beforeUpdate(wallet, options) {
-      const user = await User.findByPk(wallet.user_id); // Fetch user by user_id
-      if (user && user.country === 'South Africa') {
-        wallet.currency = 'R'; // Set currency to 'R' (ZAR)
-      } else {
-        wallet.currency = '$'; // Default currency to USD if not South Africa
+    async beforeSave(wallet) { 
+      if (!wallet.currency) {
+        const user = await User.findByPk(wallet.user_id);
+        wallet.currency = user && user.country === 'South Africa' ? 'R' : '$';
       }
     },
   },
+  indexes: [
+    { fields: ["user_id"] },  
+    { fields: ["wallet_address"], unique: true }, 
+  ],
+  tableName: "wallets",
 });
 
 module.exports = Wallet;

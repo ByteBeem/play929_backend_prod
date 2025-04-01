@@ -1,4 +1,5 @@
 const Wallet = require("../models/wallet");
+const SecurityLogs = require("../models/securityLogs");
 const User = require("../models/User");
 const Transaction = require("../models/transactions");
 const authMiddleware = require("../middlewares/authMiddleware");
@@ -6,6 +7,7 @@ const Authentication = require("../models/2FAuthentication");
 const sequelize = require("../config/db");
 const validator = require('validator');
 const { authenticator } = require('otplib');
+const {getClientIP, getBrowserName  , Ratelimiter} =  require("../utils/helpers");
 const qrcode = require('qrcode');
 
 
@@ -65,6 +67,8 @@ exports.Data = async (req, res) => {
       
       const user = await User.findOne({ where: { email: req.user.email } });
 
+       
+
       if (!user) {
         return res.status(404).json({ error: "User Not Found." });
       }
@@ -86,6 +90,7 @@ exports.Data = async (req, res) => {
               user_id: user.id,
               wallet_address: user.walletAddress, 
               balance: 0,
+              currency : user.country === 'South Africa' ? 'R' : '$',
             },
             { transaction: t }
           );
@@ -106,6 +111,8 @@ exports.Data = async (req, res) => {
           // Update wallet balance with the bonus
           wallet.balance = initialBalance;
           await wallet.save({ transaction: t });
+
+        
 
           // Commit the transaction
           await t.commit();
@@ -134,6 +141,8 @@ exports.Data = async (req, res) => {
           return res.status(500).json({ error: "Server error. Please try again later." });
         }
       } else {
+
+     
        
         const userData = {
           accountNumber: user.accountNumber,
@@ -191,10 +200,12 @@ exports.enableMFA = async (req, res) => {
   }
 };
 
-exports.validateSecret = async (req, res) => {
+exports.validateSecret = [Ratelimiter,async (req, res) => {
   try {
     authMiddleware(["user"])(req, res, async () => {
       const { code } = req.body;
+
+   
 
      
       if (!code) {
@@ -226,8 +237,6 @@ exports.validateSecret = async (req, res) => {
       if (!user) {
         return res.status(404).json({ error: "User Not Found." });
       }
-
-
      
       const t = await sequelize.transaction();
 
@@ -239,14 +248,13 @@ exports.validateSecret = async (req, res) => {
       
         await Authentication.create(
           {
-            email_address: user.email,
+            user_id: user.id,
             secret: userSecret, 
           },
           { transaction: t }
         );
 
-       
-        await t.commit();
+    
 
         return res.status(200).json({ message: "2FA enabled successfully." });
       } catch (error) {
@@ -259,5 +267,34 @@ exports.validateSecret = async (req, res) => {
   } catch (err) {
     console.error('Error validating MFA:', err);
     return res.status(500).json({ error: "Server error. Please try again later." });
+  }
+}];
+
+
+exports.SecurityLogs = async(req , res)=>{
+  try{
+
+    authMiddleware(['user'])(req , res , async()=>{
+
+
+      const securitylogs = await SecurityLogs.findAll({
+        where: { email_address: req.user.email },
+        order: [['created_at', 'DESC']], 
+        limit: 5, 
+      });
+
+      if (securitylogs.length === 0) {
+        return res.status(404).json({ message: "No logs found." });
+      }
+
+     
+
+      res.status(200).json({securitylogs});
+    
+    });
+
+  }catch(error){
+    console.error(error);
+    return res.status(500).json({error:"Server error. Please try again later."});
   }
 };

@@ -1,3 +1,5 @@
+const useragent = require('useragent');
+const rateLimit = require('express-rate-limit');
 
  const isValidEmail = (email) =>{
 
@@ -56,4 +58,31 @@
     ];
 };
 
-module.exports = { isValidEmail, isValidFirstName, isValidLastName, isValidCountry  , initializeGames};
+function getClientIP(req) {
+    let ip =
+        req.headers['x-forwarded-for']?.split(',')[0].trim() ||  
+        req.socket?.remoteAddress ||  
+        req.connection?.remoteAddress ||  
+        'Unknown';
+
+    if (ip === '::1') return '127.0.0.1';
+    return ip.replace(/^::ffff:/, '');
+}
+
+
+
+function getBrowserName(req) {
+    const agent = useragent.parse(req.headers['user-agent']);
+    return agent.family.replace(/[^a-zA-Z0-9 ._-]/g, ''); 
+};
+
+
+const Ratelimiter = rateLimit({
+    windowMs: 5 * 60 * 1000, 
+    max: 5, 
+    message: "Too many attempts. Try again later."
+});
+
+
+
+module.exports = { isValidEmail, isValidFirstName, Ratelimiter, getBrowserName, isValidLastName, isValidCountry  , getClientIP, initializeGames};

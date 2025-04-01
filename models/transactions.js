@@ -11,7 +11,7 @@ const Transaction = sequelize.define("Transaction", {
     type: DataTypes.UUID,
     allowNull: false,
     references: {
-      model: 'Wallets', 
+      model: 'wallets', 
       key: 'id',
     },
     onDelete: 'CASCADE',
@@ -42,6 +42,11 @@ const Transaction = sequelize.define("Transaction", {
   timestamps: true,
   updatedAt: 'updated_at',
   createdAt: 'created_at',
+  indexes: [
+    { fields: ["wallet_id"] }, 
+    { fields: ["transaction_ref"], unique: true }, 
+  ],
+  tableName: "transactions",
 });
 
 module.exports = Transaction;
