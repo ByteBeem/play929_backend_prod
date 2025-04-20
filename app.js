@@ -11,11 +11,12 @@ const walletRoutes = require("./routes/walletRoutes");
 const app = express();
 
 app.use(
-    cors({
-      origin: "http://localhost:3000", 
-      credentials: true, 
-    })
-  );
+  cors({
+    origin: ["https://my.play929.com", "https://dashboard.play929.com"],
+    credentials: true,
+  })
+);
+
 app.use(helmet());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
