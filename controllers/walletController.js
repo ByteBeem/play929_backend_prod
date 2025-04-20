@@ -1,8 +1,10 @@
 const Methods = require("../paymentData/methods.json");
 const WMethods = require("../paymentData/withdrawalMethods.json");
 const User = require("../models/User");
+const SecurityLogs = require("../models/securityLogs");
 const Wallet = require("../models/wallet");
 const Refund = require("../models/Refund");
+const {getClientIP, getBrowserName  , Ratelimiter} =  require("../utils/helpers");
 const sequelize = require("../config/db");
 const crypto = require("crypto");
 const paypal = require('@paypal/checkout-server-sdk');
@@ -194,6 +196,7 @@ exports.InternetDeposit = async (req, res) => {
         if (wallet.status !== "active") {
             return res.status(403).json({ error: `Wallet is ${wallet.status}. Deposits are not allowed.` });
         }
+        
 
         // Start transaction
         const t = await sequelize.transaction();
@@ -229,53 +232,193 @@ exports.InternetDeposit = async (req, res) => {
 };
 
 
-
-
 // Create PayPal Order
-exports.paypalDeposit= async (req, res) => {
+exports.paypalDeposit = async (req, res) => {
+  try {
     const { amount } = req.body;
 
-    const request = new paypal.orders.OrdersCreateRequest();
-    request.prefer("return=representation");
-    request.requestBody({
-      intent: "CAPTURE",
-      purchase_units: [{
-        amount: {
-          currency_code: "USD",
-          value: amount.toString()
-        }
-      }],
-      application_context: {
-        return_url: "http://localhost:5000/paypal-success",  
-        cancel_url: "http://localhost:5000/paypal-cancel"    
-      }
-    });
-  
-    try {
-      const order = await client.execute(request);
-      const approveUrl = order.result.links.find(link => link.rel === 'approve').href;
-      res.status(200).json({ approveUrl });
-    } catch (err) {
-      console.error('Error creating PayPal order:', err);
-      res.status(500).send('Error creating PayPal order');
+    // Validate input amount
+    if (!amount || isNaN(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid amount provided.' });
     }
-};
 
-// Capture the PayPal Payment
-exports.capture_paypal_payment = async (req, res) => {
-  const { orderID } = req.body;
+    // Authenticate user
+    authMiddleware(['user'])(req, res, async () => {
+      // Find the user
+      const user = await User.findOne({ where: { email: req.user.email } });
+      if (!user) {
+        return res.status(404).json({ error: 'User not found.' });
+      }
 
-  const request = new paypal.orders.OrdersCaptureRequest(orderID);
-  request.requestBody({});
-  try {
-    const capture = await client.execute(request);
-    res.json({ captureID: capture.result.id });
+      // Find wallet associated with the user
+      let wallet = await Wallet.findOne({
+        where: { user_id: user.id, wallet_address: user.walletAddress }
+      });
+
+      if (!wallet) {
+        return res.status(401).json({ error: 'Invalid wallet address or session expired, please log in.' });
+      }
+
+      // Check wallet status
+      if (wallet.status !== 'active') {
+        return res.status(403).json({ error: `Wallet is ${wallet.status}. Deposits are not allowed.` });
+      }
+
+     // Adjust amount based on currency
+    let newAmount = amount;
+    if (wallet.currency === 'R') {
+    newAmount = parseFloat((amount / 18).toFixed(2)); 
+    }
+
+      // Create PayPal order request
+      const request = new paypal.orders.OrdersCreateRequest();
+      request.prefer('return=representation');
+      request.requestBody({
+        intent: 'CAPTURE',
+        purchase_units: [{
+        reference_id: user.id,
+          amount: {
+            currency_code: 'USD',
+            value: newAmount.toString()
+          }
+        }],
+        application_context: {
+          return_url: 'https://api.play929.com/api/wallet/capture_paypal_payment',  
+          cancel_url: 'https://api.play929.com/paypal-cancel',  
+        }
+      });
+
+      // Execute the PayPal order creation request
+      const order = await client.execute(request);
+
+      // Find the approval URL from the response
+      const approveUrl = order.result.links.find(link => link.rel === 'approve').href;
+
+      // Return the approval URL to the client
+      res.status(200).json({ approveUrl });
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).send('Error capturing PayPal payment');
+    console.error('Error creating PayPal order:', err);
+    res.status(500).send('Error creating PayPal order');
   }
 };
 
+exports.capture_paypal_payment = async (req, res) => {
+    const { token, PayerID } = req.query;
+    const ip = getClientIP(req);
+    const browser = getBrowserName(req);
+  
+    if (!token || !PayerID) {
+      return res.status(400).json({ error: "Missing token or PayerID in the request." });
+    }
+  
+    const request = new paypal.orders.OrdersCaptureRequest(token);
+    request.requestBody({ payer_id: PayerID });
+  
+    try {
+      const capture = await client.execute(request);
+      const captureResult = capture.result;
+  
+      if (captureResult.status !== "COMPLETED") {
+        return res.status(400).json({ error: "Payment not completed." });
+      }
+  
+      const userId = captureResult.purchase_units?.[0]?.reference_id;
+      if (!userId) {
+        return res.status(400).json({ error: "User reference not found in payment." });
+      }
+  
+      const user = await User.findByPk(userId);
+      if (!user) {
+        return res.status(404).json({ error: "User not found." });
+      }
+  
+      const wallet = await Wallet.findOne({
+        where: {
+          user_id: user.id,
+          wallet_address: user.walletAddress,
+        },
+      });
+  
+      if (!wallet) {
+        return res.status(404).json({ error: "Wallet not found for user." });
+      }
+  
+      const depositAmountStr = captureResult.purchase_units?.[0]?.payments?.captures?.[0]?.amount?.value;
+      if (!depositAmountStr) {
+        return res.status(400).json({ error: "Could not determine deposit amount." });
+      }
+  
+      const depositAmount = parseFloat(depositAmountStr);
+      const finalAmount = wallet.currency === 'R'
+        ? parseFloat((depositAmount * 18).toFixed(2))
+        : parseFloat(depositAmount.toFixed(2));
+  
+      const t = await sequelize.transaction();
+      try {
+        wallet.balance = parseFloat(wallet.balance) + finalAmount;
+        await wallet.save({ transaction: t });
+  
+        await Transaction.create({
+          wallet_id: wallet.id,
+          transaction_type: "deposit",
+          amount: finalAmount,
+          transaction_ref: `Deposit-${wallet.id}-${Date.now()}`,
+          status: "completed",
+          wallet_address: wallet.wallet_address || "N/A",
+        }, { transaction: t });
+  
+        await t.commit();
+  
+        res.status(200).json({
+          message: "Payment captured and wallet updated.",
+          transactionID: captureResult.id,
+          status: captureResult.status,
+          amount: finalAmount,
+          currency: wallet.currency,
+        });
+  
+        // Proceed to logging (after response)
+        try {
+          const logT = await sequelize.transaction();
+  
+          user.lastLogin = new Date();
+          await user.save({ transaction: logT });
+  
+          await SecurityLogs.create({
+            email_address: user.email,
+            action: "Deposit",
+            browser,
+            ip_address: ip,
+          }, { transaction: logT });
+  
+          await logT.commit();
+        } catch (logError) {
+          console.error("Logging error:", logError);
+          // Logging failure does not affect the main flow
+        }
+  
+      } catch (txError) {
+        await t.rollback();
+        console.error("Transaction error during capture:", txError);
+        return res.status(500).json({ error: "Error processing payment. Please try again." });
+      }
+  
+    } catch (err) {
+      if (err.statusCode === 422 && err.message.includes("ORDER_ALREADY_CAPTURED")) {
+        return res.status(400).json({
+          error: "This PayPal order has already been captured.",
+          debug_id: err.response?.data?.debug_id || null,
+        });
+      }
+  
+      console.error("PayPal capture error:", err);
+      return res.status(500).json({ error: "Unexpected error capturing PayPal payment." });
+    }
+  };
+  
+
+  
 
 /**
  * PayFast Deposit method

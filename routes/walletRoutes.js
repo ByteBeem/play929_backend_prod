@@ -9,7 +9,7 @@ router.get("/withdrawalMethods" ,withdrawalMethods );
 router.post("/withdrawal" ,withdrawal);
 router.post("/internetDeposit", InternetDeposit);
 router.post("/paypalDeposit", paypalDeposit);
-router.post("/capture_paypal_payment" , capture_paypal_payment);
+router.get("/capture_paypal_payment" , capture_paypal_payment);
 router.post("/payfastDeposit" , payfastDeposit);
 router.post("/payfastNotify", payfastNotify);
 router.get("/transactions" , Transactions);

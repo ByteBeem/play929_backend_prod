@@ -199,76 +199,194 @@ exports.enableMFA = async (req, res) => {
     return res.status(500).json({ error: "Server error. Please try again later." });
   }
 };
-
-exports.validateSecret = [Ratelimiter,async (req, res) => {
+exports.disableMFA = [Ratelimiter, async (req, res) => {
   try {
+    // User authentication middleware
     authMiddleware(["user"])(req, res, async () => {
+      try {
+        // Get additional details for logging
+        const ip = getClientIP(req);
+        const browser = getBrowserName(req);
+
+        // Find the user by email
+        const user = await User.findOne({ where: { email: req.user.email } });
+        if (!user) {
+          return res.status(404).json({ error: "User not found." });
+        }
+
+        // Check if 2FA is already disabled
+        if (!user.isTwoFactorEnabled) {
+          return res.status(400).json({ error: "2FA is not enabled." });
+        }
+
+        // Begin a transaction to disable 2FA
+        const t = await sequelize.transaction();
+        try {
+          // Set 2FA as disabled
+          user.isTwoFactorEnabled = false;
+          await user.save({ transaction: t });
+
+          // Remove the Authentication entry associated with the user
+          await Authentication.destroy({
+            where: { user_id: user.id },
+            transaction: t
+          });
+
+          // Commit the changes
+          await t.commit();
+
+          // Send success response
+          res.status(200).json({ message: "2FA disabled successfully." });
+
+        } catch (error) {
+          // Rollback transaction in case of failure
+          await t.rollback();
+          console.error("Error disabling 2FA:", error);
+          return res.status(500).json({ error: "Failed to disable 2FA. Please try again later." });
+        }
+
+        // Log the action in a separate transaction after the 2FA disable process completes
+        const logT = await sequelize.transaction();
+        try {
+          // Update last login time
+          user.lastLogin = Date.now();
+          await user.save({ transaction: logT });
+
+          // Log the action of disabling 2FA
+          await SecurityLogs.create(
+            {
+              email_address: user.email,
+              action: "2FA Disabled",
+              browser,
+              ip_address: ip,
+            },
+            { transaction: logT }
+          );
+
+          // Commit logging transaction
+          await logT.commit();
+        } catch (logError) {
+          // Rollback the logging transaction if error occurs
+          await logT.rollback();
+          console.error("Logging error:", logError);
+          // Continue with 2FA disable success even if logging fails
+        }
+
+      } catch (error) {
+        console.error('Error in MFA disable process:', error);
+        return res.status(500).json({ error: "Server error. Please try again later." });
+      }
+    });
+  } catch (err) {
+    console.error('Unexpected error:', err);
+    return res.status(500).json({ error: "Server error. Please try again later." });
+  }
+}];
+
+
+exports.validateSecret = [
+  Ratelimiter,
+  authMiddleware(["user"]),
+  async (req, res) => {
+    // Get extra info for logs
+    const ip = getClientIP(req);
+    const browser = getBrowserName(req);
+
+    try {
+      // Validate the input code.
       const { code } = req.body;
-
-   
-
-     
       if (!code) {
         return res.status(400).json({ error: "Code is required." });
       }
 
-    
-      const sanitizedCode = validator.escape(code);
-      if (!validator.isNumeric(sanitizedCode) || sanitizedCode.length !== 6) {
+      const trimmedCode = code.trim();
+      if (!validator.isNumeric(trimmedCode) || trimmedCode.length !== 6) {
         return res.status(400).json({ error: "Invalid code format. It should be a 6-digit number." });
       }
 
-     
+      // Retrieve the user's secret.
       const userSecret = await getSecret(req.user.email);
       if (!userSecret) {
         return res.status(404).json({ error: "No secret found for the user." });
       }
 
-    
-      const isValid = authenticator.verify({ token: sanitizedCode, secret: userSecret });
+      // Verify the OTP token.
+      const isValid = authenticator.verify({ token: trimmedCode, secret: userSecret });
       if (!isValid) {
         return res.status(400).json({ error: "Incorrect code. Please try again." });
       }
 
-      removeSecret(req.user.email);
-
-    
+      // Find the user by email.
       const user = await User.findOne({ where: { email: req.user.email } });
       if (!user) {
         return res.status(404).json({ error: "User Not Found." });
       }
-     
-      const t = await sequelize.transaction();
 
+      // Check if 2FA is already enabled.
+      if (user.isTwoFactorEnabled) {
+        return res.status(400).json({ error: "2FA is already enabled." });
+      }
+
+      // Begin transaction for 2FA update.
+      const t = await sequelize.transaction();
       try {
-       
         user.isTwoFactorEnabled = true;
         await user.save({ transaction: t });
 
-      
         await Authentication.create(
           {
             user_id: user.id,
-            secret: userSecret, 
+            secret: userSecret,
           },
           { transaction: t }
         );
 
-    
-
-        return res.status(200).json({ message: "2FA enabled successfully." });
+        // Commit the 2FA enablement transaction.
+        await t.commit();
       } catch (error) {
-        
         await t.rollback();
-        console.error('Error enabling 2FA:', error);
+        console.error("Error enabling 2FA:", error);
         return res.status(500).json({ error: "Failed to enable 2FA. Please try again later." });
       }
-    });
-  } catch (err) {
-    console.error('Error validating MFA:', err);
-    return res.status(500).json({ error: "Server error. Please try again later." });
+
+      // Optionally log this action in a separate transaction.
+      try {
+        const logT = await sequelize.transaction();
+        try {
+          // Optionally update user last login or similar info.
+          user.lastLogin = Date.now();
+          await user.save({ transaction: logT });
+
+          await SecurityLogs.create(
+            {
+              email_address: user.email,
+              action: "2FA Enabled",
+              browser,
+              ip_address: ip,
+            },
+            { transaction: logT }
+          );
+          await logT.commit();
+        } catch (logError) {
+          await logT.rollback();
+          console.error("Logging error:", logError);
+          // Logging failures won't prevent success, so we just log the error.
+        }
+      } catch (logTxnError) {
+        console.error("Failed to start logging transaction:", logTxnError);
+      }
+
+      return res.status(200).json({ message: "2FA enabled successfully." });
+    } catch (error) {
+      console.error("Server error in validateSecret:", error);
+      return res.status(500).json({ error: "Server error. Please try again later." });
+    } finally {
+      // Always remove the secret (if stored) regardless of outcome.
+      removeSecret(req.user.email);
+    }
   }
-}];
+];
+
 
 
 exports.SecurityLogs = async(req , res)=>{

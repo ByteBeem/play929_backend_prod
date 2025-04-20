@@ -9,7 +9,7 @@ const authMiddleware = (roles = []) => {
   return (reqOrWs, resOrNext, next) => {
     let token;
 
-    // 🛑 Check if this is an HTTP request (Express)
+    //  Check if this is an HTTP request (Express)
     if (resOrNext && typeof next === "function") {
       token = reqOrWs.cookies?.jwt_token;
 
@@ -31,7 +31,7 @@ const authMiddleware = (roles = []) => {
       }
     }
 
-    // 🛑 Otherwise, it's a WebSocket request
+    //  Otherwise, it's a WebSocket request
     else {
       const req = resOrNext; // In WebSocket, the second argument is `req`
       token = extractTokenFromCookies(req.headers.cookie);
