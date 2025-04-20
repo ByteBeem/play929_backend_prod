@@ -15,6 +15,11 @@ require("dotenv").config();
 
 const SecretKey = process.env.SECRET;
 
+const isProduction = process.env.NODE_ENV === "production";
+const getBaseURL = () => isProduction ? process.env.REDIRECT_URL_AUTH || "https://auth.play929.com" : "http://localhost:3000";
+const getDashboardURL = () => isProduction ? "https://dashboard.play929.com" : "http://localhost:3001";
+const server_url = "https://api.play929.com";
+
 
 
 function GenerateSecureGameId(GameType, userId, transactionRef) {
@@ -77,7 +82,7 @@ function base64UrlDecode(input) {
 
 exports.Data = async (req, res) => {
     try {
-        const gameInfo =  initializeGames("http://localhost:5000"); 
+        const gameInfo =  initializeGames(server_url); 
 
         res.json({ gameInfo });
 
