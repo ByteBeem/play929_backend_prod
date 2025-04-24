@@ -18,17 +18,21 @@ const sequelize = new Sequelize(
   }
 );
 
-sequelize.authenticate()
-  .then(() => {
+(async () => {
+  try {
+    await sequelize.authenticate();
     console.log("✅ Database connected using SSL");
-    //sequelize.sync({ alter: true });
 
-  })
-  .then(() => {
-    console.log("💥 Database dropped and re-synced to match models");
-  })
-  .catch((err) => {
-    console.error("❌ Database connection or sync error:", err);
-  });
+    // Drop all tables and their related constraints (cascade)
+    await sequelize.drop();
+    console.log("🧹 All tables dropped");
+
+    // Recreate based on the current models
+    await sequelize.sync({ force: true });
+    console.log("🔁 Database synced with models (force: true)");
+  } catch (err) {
+    console.error("❌ Error syncing database:", err);
+  }
+})();
 
 module.exports = sequelize;
