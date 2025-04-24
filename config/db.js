@@ -21,7 +21,8 @@ const sequelize = new Sequelize(
 sequelize.authenticate()
   .then(() => {
     console.log("✅ Database connected using SSL");
-    return sequelize.sync({ force: true }); 
+    sequelize.sync({ alter: true });
+
   })
   .then(() => {
     console.log("💥 Database dropped and re-synced to match models");
