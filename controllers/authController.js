@@ -20,7 +20,7 @@ const getDashboardURL = () => isProduction ? "https://dashboard.play929.com" : "
 const sendLoginOTP = async (email) => {
     try {
         const otp = crypto.randomInt(100000, 999999).toString();
-        await storeOTP(email, otp);
+         storeOTP(email, otp);
         await sendOTP(email, otp);
         return { message: "OTP sent to email" };
     } catch (err) {
@@ -68,6 +68,7 @@ exports.login = [Ratelimiter, async (req, res) => {
         }
 
         const user = await User.findOne({ where: { email } });
+
         if (!user) {
             return res.status(404).json({ error: "Account does not exist" });
         }
@@ -91,8 +92,8 @@ exports.login = [Ratelimiter, async (req, res) => {
         const redirectURL = `${getBaseURL()}/SignInCode?secure=true&user=${encodeURIComponent(user.email)}`;
         res.json({ message: "Sign-in Code sent to your email.", link: redirectURL });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Server error. Please try again later." });
+        
+        res.status(500).json({ error: "Something went wrong , try again later." });
     }
 }];
 
@@ -128,6 +129,7 @@ exports.createAccount = [Ratelimiter, async (req, res) => {
             walletAddress,
         });
 
+       
         const token = jwt.sign(
             { id: newUser.id, email: newUser.email, role: newUser.role },
             process.env.JWT_SECRET,
@@ -166,15 +168,22 @@ exports.verifyCode = [Ratelimiter, async (req, res) => {
 
             const storedCode = await getOTP(email);
             if (!storedCode || storedCode !== code) return res.status(401).json({ error: "Incorrect or Expired Code." });
-            await removeOTP(email);
+             
+            removeOTP(email);
 
             const existingUser = await User.findOne({ where: { email } });
             if (!existingUser) return res.status(400).json({ error: "Account not Found." });
 
+            const mfa_token = jwt.sign(
+                { id: existingUser.id, email: existingUser.email, role: existingUser.role },
+                process.env.JWT_SECRET,
+                { algorithm: 'HS512', expiresIn: '15m' }
+            );
+
             if (existingUser.isTwoFactorEnabled) {
                 return res.status(200).json({
                     message: "Enter the code from your authenticator app.",
-                    link: `${getBaseURL()}/mfa`
+                    link: `${getBaseURL()}/mfa?sid=${mfa_token}&user=${encodeURIComponent(email)}`,
                 });
             }
 

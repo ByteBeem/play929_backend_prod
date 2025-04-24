@@ -117,8 +117,6 @@ exports.withdrawal = async (req, res) => {
         }
 
        
-
-       
         const t = await sequelize.transaction();
 
         try {

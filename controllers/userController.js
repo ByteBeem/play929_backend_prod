@@ -394,7 +394,6 @@ exports.SecurityLogs = async(req , res)=>{
 
     authMiddleware(['user'])(req , res , async()=>{
 
-
       const securitylogs = await SecurityLogs.findAll({
         where: { email_address: req.user.email },
         order: [['created_at', 'DESC']], 
@@ -404,8 +403,6 @@ exports.SecurityLogs = async(req , res)=>{
       if (securitylogs.length === 0) {
         return res.status(404).json({ message: "No logs found." });
       }
-
-     
 
       res.status(200).json({securitylogs});
     
