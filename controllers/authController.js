@@ -7,6 +7,7 @@ const sequelize = require("../config/db");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const { Op } = require("sequelize");
+const { authenticator } = require('otplib');
 const { isValidEmail, isValidFirstName, isValidLastName, isValidCountry } = require("../utils/helpers");
 const { storeOTP, getOTP, removeOTP } = require("../utils/otpService");
 
@@ -265,3 +266,149 @@ exports.resendOTP = [Ratelimiter, async (req, res) => {
         return res.status(500).json({ error: "Server error. Please try again later." });
     }
 }];
+
+exports.verifyMFA = [
+    RateLimiter, // Configured for MFA attempts (e.g., 5 attempts/15 min)
+    async (req, res) => {
+        // Security headers
+        res.set({
+            'X-Content-Type-Options': 'nosniff',
+            'X-Frame-Options': 'DENY',
+            'Strict-Transport-Security': 'max-age=63072000; includeSubDomains; preload'
+        });
+
+        try {
+            // Validate content type
+            if (!req.is('application/json')) {
+                return res.status(415).json({ error: "Unsupported Media Type" });
+            }
+
+            // Input validation
+            const { code, sid } = req.body;
+            if (!code || !sid || typeof code !== 'string' || typeof sid !== 'string') {
+                return res.status(400).json({ error: "Invalid input format" });
+            }
+
+            const trimmedCode = code.trim();
+            if (!/^\d{6}$/.test(trimmedCode)) {
+                return res.status(400).json({ error: "Invalid MFA code format" });
+            }
+
+            // JWT verification
+            let decoded;
+            try {
+                decoded = jwt.verify(sid, process.env.JWT_SECRET, {
+                    algorithms: ['HS512'],
+                    maxAge: '15m' // MFA session should be recent
+                });
+            } catch (jwtError) {
+                const message = jwtError instanceof jwt.TokenExpiredError ? 
+                    "Session expired" : "Invalid session token";
+                return res.status(401).json({ error: message });
+            }
+
+            // Validate JWT payload
+            if (!decoded?.id || !decoded?.email || !Number.isInteger(decoded.id)) {
+                return res.status(400).json({ error: "Invalid token payload" });
+            }
+
+            // Retrieve user with MFA secret
+            const user = await User.findOne({
+                where: { 
+                    id: decoded.id,
+                    email: decoded.email,
+                    isTwoFactorEnabled: true // Only check users with MFA enabled
+                },
+                include: [{
+                    model: Authentication,
+                    attributes: ['secret'],
+                    required: true
+                }],
+                attributes: ['id', 'email', 'role', 'firstName', 'lastLogin']
+            });
+
+            if (!user || !user.Authentication || !user.Authentication.secret) {
+                // Generic error to prevent user enumeration
+                return res.status(401).json({ error: "Authentication failed" });
+            }
+
+            // Verify TOTP code
+            const isValid = authenticator.verify({
+                token: trimmedCode,
+                secret: user.Authentication.secret,
+                window: 1 
+            });
+
+            if (!isValid) {
+                // Log failed attempt (non-blocking)
+                SecurityLogs.create({
+                    email_address: user.email,
+                    action: "Failed MFA Attempt",
+                    browser: getBrowserName(req),
+                    ip_address: getClientIP(req)
+                }).catch(e => console.error("Failed to log MFA attempt:", e));
+
+                return res.status(401).json({ error: "Invalid MFA code" });
+            }
+
+            // Generate session token with MFA claim
+            const token = jwt.sign(
+                {
+                    id: user.id,
+                    email: user.email,
+                    role: user.role,
+                    authTime: Math.floor(Date.now() / 1000),
+                    mfaVerified: true 
+                },
+                process.env.JWT_SECRET,
+                { 
+                    algorithm: 'HS512',
+                    expiresIn: '1h',
+                    issuer: 'play929.auth',
+                    audience: 'play929.web'
+                }
+            );
+
+            // Secure cookie settings
+            res.cookie('jwt_token', token, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                maxAge: 3600000, // 1 hour
+                sameSite: 'Strict',
+                domain: process.env.NODE_ENV === 'production' ? '.play929.com' : 'localhost',
+                path: '/',
+                priority: 'high'
+            });
+
+            // Log successful authentication
+            SecurityLogs.create({
+                email_address: user.email,
+                action: "Successful MFA Login",
+                browser: getBrowserName(req),
+                ip_address: getClientIP(req)
+            }).catch(e => console.error("Failed to log successful login:", e));
+
+            // Update last login (non-blocking)
+            User.update({ lastLogin: new Date() }, { 
+                where: { id: user.id } 
+            }).catch(e => console.error("Failed to update last login:", e));
+
+            const redirectURL = `${getDashboardURL()}/dashboard`;
+            return res.json({ 
+                message: `Welcome back, ${user.firstName}!`, 
+                link: redirectURL,
+                csrfToken: generateCSRFToken()
+            });
+
+        } catch (err) {
+            console.error(`MFA Verification Error: ${err.stack || err}`);
+            const errorId = crypto.randomBytes(8).toString('hex');
+            res.set('X-Error-ID', errorId);
+            
+            return res.status(500).json({ 
+                error: "Authentication service unavailable",
+                reference: errorId
+            });
+        }
+    }
+];

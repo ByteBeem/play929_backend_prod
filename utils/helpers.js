@@ -79,7 +79,7 @@ function getBrowserName(req) {
 
 const Ratelimiter = rateLimit({
     windowMs: 5 * 60 * 1000, 
-    max: 5, 
+    max: 100, 
     message: "Too many attempts. Try again later."
 });
 
