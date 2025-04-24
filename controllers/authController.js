@@ -324,7 +324,7 @@ exports.verifyMFA = [
             });
         
            
-            const authentication = await Authentication.findOne({
+            const user_authentication = await Authentication.findOne({
                 where: {
                 userId: user.id
                 },
@@ -333,7 +333,7 @@ exports.verifyMFA = [
   
 
 
-            if (!user || !authentication || !authentication.secret) {
+            if (!user || !user_authentication || !user_authentication.secret) {
                 // Generic error to prevent user enumeration
                 return res.status(401).json({ error: "Authentication failed" });
             }
@@ -341,7 +341,7 @@ exports.verifyMFA = [
             // Verify TOTP code
             const isValid = authenticator.verify({
                 token: trimmedCode,
-                secret: user.Authentication.secret,
+                secret: user_authentication.secret,
                 window: 1 
             });
 
