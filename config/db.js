@@ -23,11 +23,10 @@ const sequelize = new Sequelize(
     await sequelize.authenticate();
     console.log("✅ Database connected using SSL");
 
-    // Drop all tables and their related constraints (cascade)
-    await sequelize.drop();
-    console.log("🧹 All tables dropped");
+    // 🚨 Nuke everything
+    await sequelize.query(`DROP SCHEMA public CASCADE; CREATE SCHEMA public;`);
+    console.log("💣 Dropped and recreated public schema");
 
-    // Recreate based on the current models
     await sequelize.sync({ force: true });
     console.log("🔁 Database synced with models (force: true)");
   } catch (err) {
