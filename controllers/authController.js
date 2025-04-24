@@ -313,23 +313,27 @@ exports.verifyMFA = [
                 return res.status(400).json({ error: "Invalid token, please login again." });
             }
 
-            // Retrieve user with MFA secret
+          
             const user = await User.findOne({
-                where: { 
+                where: {
                 id: decoded.id,
                 email: decoded.email,
-                isTwoFactorEnabled: true 
+                isTwoFactorEnabled: true
                 },
-                include: [{
-                model: Authentication,
-                as: 'authentication', 
-                attributes: ['secret'],
-                required: true
-                }],
                 attributes: ['id', 'email', 'role', 'firstName', 'lastLogin']
             });
+        
+           
+            const authentication = await Authentication.findOne({
+                where: {
+                userId: user.id
+                },
+                attributes: ['secret']
+            });
+  
 
-            if (!user || !user.Authentication || !user.Authentication.secret) {
+
+            if (!user || !authentication || !authentication.secret) {
                 // Generic error to prevent user enumeration
                 return res.status(401).json({ error: "Authentication failed" });
             }
