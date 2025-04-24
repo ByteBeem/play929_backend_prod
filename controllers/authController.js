@@ -268,7 +268,7 @@ exports.resendOTP = [Ratelimiter, async (req, res) => {
 }];
 
 exports.verifyMFA = [
-    RateLimiter, // Configured for MFA attempts (e.g., 5 attempts/15 min)
+    Ratelimiter,
     async (req, res) => {
         // Security headers
         res.set({
