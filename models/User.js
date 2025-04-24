@@ -74,4 +74,11 @@ const User = sequelize.define("User", {
     tableName: "users",
 });
 
+User.associate = function(models) {
+    User.hasOne(models.TwoFactorAuth, {
+      foreignKey: 'user_id',
+      as: 'authentication' 
+    });
+  };
+
 module.exports = User;

@@ -316,14 +316,15 @@ exports.verifyMFA = [
             // Retrieve user with MFA secret
             const user = await User.findOne({
                 where: { 
-                    id: decoded.id,
-                    email: decoded.email,
-                    isTwoFactorEnabled: true 
+                id: decoded.id,
+                email: decoded.email,
+                isTwoFactorEnabled: true 
                 },
                 include: [{
-                    model: Authentication,
-                    attributes: ['secret'],
-                    required: true
+                model: Authentication,
+                as: 'authentication', 
+                attributes: ['secret'],
+                required: true
                 }],
                 attributes: ['id', 'email', 'role', 'firstName', 'lastLogin']
             });

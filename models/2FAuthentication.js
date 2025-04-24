@@ -1,6 +1,5 @@
 const { DataTypes } = require("sequelize");
 const sequelize = require("../config/db");
-const User = require("./User"); 
 
 const Authentication = sequelize.define("TwoFactorAuth", {
   id: {
@@ -26,11 +25,17 @@ const Authentication = sequelize.define("TwoFactorAuth", {
 }, {
   timestamps: true,
   paranoid: true, 
-  tableName: "two_factor_auth",
+  tableName: "two_factor_auth", 
   indexes: [
     { fields: ["user_id"], unique: true }, 
-  ],
-  tableName: "TwoFactorAuth",
+  ]
 });
+
+Authentication.associate = function(models) {
+  Authentication.belongsTo(models.User, {
+    foreignKey: 'user_id',
+    as: 'user'
+  });
+};
 
 module.exports = Authentication;
