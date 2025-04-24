@@ -6,6 +6,7 @@ const { getClientIP, getBrowserName, Ratelimiter } = require("../utils/helpers")
 const sequelize = require("../config/db");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
+const Authentication = require("../models/2FAuthentication");
 const { Op } = require("sequelize");
 const { authenticator } = require('otplib');
 const { isValidEmail, isValidFirstName, isValidLastName, isValidCountry } = require("../utils/helpers");
@@ -299,7 +300,7 @@ exports.verifyMFA = [
             try {
                 decoded = jwt.verify(sid, process.env.JWT_SECRET, {
                     algorithms: ['HS512'],
-                    maxAge: '15m' // MFA session should be recent
+                    maxAge: '15m' 
                 });
             } catch (jwtError) {
                 const message = jwtError instanceof jwt.TokenExpiredError ? 
@@ -308,8 +309,8 @@ exports.verifyMFA = [
             }
 
             // Validate JWT payload
-            if (!decoded?.id || !decoded?.email || !Number.isInteger(decoded.id)) {
-                return res.status(400).json({ error: "Invalid token payload" });
+            if (!decoded?.id || !decoded?.email || !decoded?.role) {
+                return res.status(400).json({ error: "Invalid token, please login again." });
             }
 
             // Retrieve user with MFA secret
@@ -317,7 +318,7 @@ exports.verifyMFA = [
                 where: { 
                     id: decoded.id,
                     email: decoded.email,
-                    isTwoFactorEnabled: true // Only check users with MFA enabled
+                    isTwoFactorEnabled: true 
                 },
                 include: [{
                     model: Authentication,
