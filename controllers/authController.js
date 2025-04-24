@@ -31,6 +31,26 @@ const sendLoginOTP = async (email) => {
     }
 };
 
+function verifyCSRFToken(token, userId) {
+    const [raw, signature] = token.split('.');
+    const expectedSig = crypto
+        .createHmac('sha256', process.env.CSRF_SECRET)
+        .update(raw + userId)
+        .digest('hex');
+    return expectedSig === signature;
+}
+
+
+function generateCSRFToken(userId) {
+    const token = crypto.randomBytes(16).toString('hex');
+    const signature = crypto
+        .createHmac('sha256', process.env.CSRF_SECRET)
+        .update(token + userId)
+        .digest('hex');
+    return `${token}.${signature}`;
+}
+
+
 /**
  * Generate a unique account number
  */
@@ -403,7 +423,7 @@ exports.verifyMFA = [
             return res.json({ 
                 message: `Welcome back, ${user.firstName}!`, 
                 link: redirectURL,
-                csrfToken: generateCSRFToken()
+                csrfToken: generateCSRFToken(user.id)
             });
 
         } catch (err) {
