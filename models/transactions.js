@@ -17,7 +17,7 @@ const Transaction = sequelize.define("Transaction", {
     onDelete: 'CASCADE',
   },
   transaction_type: {
-    type: DataTypes.ENUM('deposit', 'withdrawal', 'bet', 'win', 'refund', 'bonus'),
+    type:DataTypes.STRING(255),
     allowNull: false,
   },
   amount: {
@@ -30,7 +30,7 @@ const Transaction = sequelize.define("Transaction", {
     unique: true,
   },
   status: {
-    type: DataTypes.ENUM('pending', 'completed', 'failed'),
+    type: DataTypes.STRING(255),
     allowNull: false,
     defaultValue: 'pending',
   },

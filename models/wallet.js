@@ -57,4 +57,12 @@ const Wallet = sequelize.define("Wallet", {
   tableName: "wallets",
 });
 
+Wallet.associate = function(models) {
+  Wallet.belongsTo(models.User, {
+    foreignKey: 'user_id',
+    as: 'user',
+  });
+};
+
+
 module.exports = Wallet;

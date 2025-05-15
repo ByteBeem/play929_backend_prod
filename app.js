@@ -12,7 +12,9 @@ const app = express();
 
 app.use(
   cors({
-    origin: ["https://my.play929.com", "https://dashboard.play929.com"],
+    origin: ["https://my.play929.com", "https://dashboard.play929.com"  , "http://localhost:3000"],
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+   
     credentials: true,
   })
 );
